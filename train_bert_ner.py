@@ -25,7 +25,7 @@ class BondQuoteDataset(Dataset):
         
         # 标签映射
         self.tag2idx = {'O': 0, '<PAD>': 1}
-        for field in ['SIDE', 'PRODUCT', 'YIELD', 'QUANTITY', 'DATE', 'SPEED', 'DATESPEED']:
+        for field in ['SIDE', 'PRODUCT', 'YIELD', 'QUANTITY', 'DATE', 'SPEED']:
             for prefix in ['B', 'I', 'E', 'S']:
                 self.tag2idx[f'{prefix}-{field}'] = len(self.tag2idx)
         self.idx2tag = {v: k for k, v in self.tag2idx.items()}

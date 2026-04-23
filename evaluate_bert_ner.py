@@ -1,14 +1,34 @@
-# evaluate_bert_ner.py
 import torch
 from train_bert_ner import BertCRFNER, BondQuoteDataset
-from transformers import BertTokenizer
+from transformers import BertTokenizerFast
 from sklearn.metrics import classification_report, f1_score
+from pathlib import Path
 
 
 def detailed_evaluation():
     """详细评估"""
+    # 配置
+    config = {
+        'batch_size': 8,
+        'learning_rate': 2e-5,
+        'num_epochs': 1,
+        'max_length': 32,
+        'bert_model': './models/bert-base-chinese',
+        'use_local_model': True
+    }
+
+    # 预下载模型（如果本地不存在）
+    if config['use_local_model']:
+        if not Path(config['bert_model']).exists():
+            print("检测到本地模型不存在，开始预下载...")
+            model_dir = snapshot_download('google-bert/bert-base-chinese', cache_dir=config['bert_model'])
+        else:
+            print(f"✓ 使用本地模型: {config['bert_model']}")
+
+    # 加载tokenizer
+    tokenizer = BertTokenizerFast.from_pretrained(config['bert_model'])
     # 加载模型
-    tokenizer = BertTokenizer.from_pretrained('bert-base-chinese')
+    # tokenizer = BertTokenizer.from_pretrained('./models/bert-base-chinese')
     test_dataset = BondQuoteDataset(
         './generated_data/test.words.txt',
         './generated_data/test.tags.txt',
@@ -16,7 +36,7 @@ def detailed_evaluation():
     )
     
     num_labels = len(test_dataset.tag2idx)
-    model = BertCRFNER(num_labels)
+    model = BertCRFNER(num_labels, bert_model_name=config['bert_model'])
     model.load_state_dict(torch.load('bert_crf_bond_ner.pth'))
     model.eval()
     
@@ -38,13 +58,15 @@ def detailed_evaluation():
                 mask = attention_mask[i].bool()
                 preds = predictions[i][:mask.sum()]
                 labs = labels[i][:mask.sum()]
-                all_predictions.extend(preds.numpy())
-                all_labels.extend(labs.numpy())
+                all_predictions.extend(preds)
+                all_labels.extend(labs.numpy().tolist())
     
     # 生成分类报告
-    tag_names = [test_dataset.idx2tag[i] for i in range(len(test_dataset.idx2tag))]
+    max_idx = max(test_dataset.idx2tag.keys())
+    tag_names = [test_dataset.idx2tag.get(i, f'UNKNOWN_{i}') for i in range(max_idx + 1)]
     report = classification_report(
         all_labels, all_predictions, 
+        labels=list(test_dataset.idx2tag.keys()),
         target_names=tag_names, 
         zero_division=0
     )
