@@ -1,11 +1,12 @@
-# train_bert_ner.py
 import torch
 from torch.utils.data import Dataset, DataLoader
-from transformers import BertTokenizer, BertForTokenClassification, AdamW
-from torchcrf import CRF
-import numpy as np
+from torch.optim import AdamW
+from transformers import BertTokenizerFast, BertForTokenClassification
+from modelscope import AutoTokenizer, AutoModelForMaskedLM, snapshot_download
+from TorchCRF import CRF
 from pathlib import Path
-import json
+import time
+from tqdm import tqdm
 
 
 class BondQuoteDataset(Dataset):
@@ -24,13 +25,9 @@ class BondQuoteDataset(Dataset):
         
         # 标签映射
         self.tag2idx = {'O': 0, '<PAD>': 1}
-        for field in ['SIDE', 'PRODUCT', 'YIELD', 'QUANTITY', 'DATE', 'SPEED']:
-            self.tag2idx.update({
-                f'B-{field}': len(self.tag2idx),
-                f'I-{field}': len(self.tag2idx),
-                f'E-{field}': len(self.tag2idx),
-                f'S-{field}': len(self.tag2idx)
-            })
+        for field in ['SIDE', 'PRODUCT', 'YIELD', 'QUANTITY', 'DATE', 'SPEED', 'DATESPEED']:
+            for prefix in ['B', 'I', 'E', 'S']:
+                self.tag2idx[f'{prefix}-{field}'] = len(self.tag2idx)
         self.idx2tag = {v: k for k, v in self.tag2idx.items()}
         
     def __len__(self):
@@ -75,7 +72,7 @@ class BertCRFNER(torch.nn.Module):
             bert_model_name,
             num_labels=num_labels
         )
-        self.crf = CRF(num_labels, batch_first=True)
+        self.crf = CRF(num_labels)
         
     def forward(self, input_ids, attention_mask, labels=None):
         outputs = self.bert(input_ids=input_ids, attention_mask=attention_mask)
@@ -83,11 +80,13 @@ class BertCRFNER(torch.nn.Module):
         
         if labels is not None:
             # 训练模式
-            loss = -self.crf(logits, labels, mask=attention_mask.bool())
-            return loss
+            crf_loss = self.crf(logits, labels, mask=attention_mask.bool())
+            if crf_loss.dim() > 0:
+                crf_loss = crf_loss.mean()
+            return -crf_loss
         else:
             # 预测模式
-            predictions = self.crf.decode(logits, mask=attention_mask.bool())
+            predictions = self.crf.viterbi_decode(logits, mask=attention_mask.bool())
             return predictions
 
 
@@ -95,15 +94,24 @@ def train_model():
     """训练模型"""
     # 配置
     config = {
-        'batch_size': 16,
+        'batch_size': 8,
         'learning_rate': 2e-5,
-        'num_epochs': 10,
-        'max_length': 128,
-        'bert_model': 'bert-base-chinese'
+        'num_epochs': 2,
+        'max_length': 32,
+        'bert_model': './models/bert-base-chinese',
+        'use_local_model': True
     }
+
+    # 预下载模型（如果本地不存在）
+    if config['use_local_model']:
+        if not Path(config['bert_model']).exists():
+            print("检测到本地模型不存在，开始预下载...")
+            model_dir = snapshot_download('google-bert/bert-base-chinese', cache_dir=config['bert_model'])
+        else:
+            print(f"✓ 使用本地模型: {config['bert_model']}")
     
     # 加载tokenizer
-    tokenizer = BertTokenizer.from_pretrained(config['bert_model'])
+    tokenizer = BertTokenizerFast.from_pretrained(config['bert_model'])
     
     # 创建数据集
     train_dataset = BondQuoteDataset(
@@ -127,18 +135,27 @@ def train_model():
     # 创建模型
     num_labels = len(train_dataset.tag2idx)
     model = BertCRFNER(num_labels, config['bert_model'])
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    device = torch.device('cuda' if torch.cuda.is_available() else 'mps')
+    # device = "cuda" if torch.cuda.is_available() else ("mps" if torch.backends.mps.is_available() else "cpu")
     model.to(device)
     
     # 优化器
     optimizer = AdamW(model.parameters(), lr=config['learning_rate'])
     
     # 训练循环
+    print(f"\n{'='*50}")
+    print(f"设备: {device}")
+    print(f"训练集: {len(train_dataset)} 条, 验证集: {len(val_dataset)} 条")
+    print(f"每epoch批次数: {len(train_loader)}")
+    print(f"{'='*50}\n")
+
     for epoch in range(config['num_epochs']):
         model.train()
         total_loss = 0
+        epoch_start = time.time()
         
-        for batch in train_loader:
+        pbar = tqdm(train_loader, desc=f"Epoch {epoch+1}/{config['num_epochs']}")
+        for batch_idx, batch in enumerate(pbar):
             optimizer.zero_grad()
             
             input_ids = batch['input_ids'].to(device)
@@ -150,13 +167,16 @@ def train_model():
             optimizer.step()
             
             total_loss += loss.item()
+            pbar.set_postfix({'loss': f'{loss.item():.4f}', 'avg': f'{total_loss / (batch_idx+1):.4f}'})
         
         avg_loss = total_loss / len(train_loader)
-        print(f"Epoch {epoch+1}/{config['num_epochs']}, Loss: {avg_loss:.4f}")
+        epoch_time = time.time() - epoch_start
+        print(f"Epoch {epoch+1}/{config['num_epochs']} 完成, Loss: {avg_loss:.4f}, 耗时: {epoch_time:.1f}s")
         
         # 验证
+        print("正在验证...")
         val_accuracy = evaluate_model(model, val_loader, device)
-        print(f"Validation Accuracy: {val_accuracy:.4f}")
+        print(f"Validation Accuracy: {val_accuracy:.4f}\n")
     
     # 保存模型
     torch.save(model.state_dict(), 'bert_crf_bond_ner.pth')
@@ -180,7 +200,7 @@ def evaluate_model(model, dataloader, device):
             # 计算准确率
             mask = attention_mask.bool()
             for i in range(len(predictions)):
-                preds = predictions[i][:mask[i].sum()]
+                preds = torch.tensor(predictions[i][:mask[i].sum()], device=device)
                 labs = labels[i][:mask[i].sum()]
                 total_correct += (preds == labs).sum().item()
                 total_samples += len(preds)
