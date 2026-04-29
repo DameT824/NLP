@@ -1,20 +1,16 @@
-# ner_service.py
-"""债券询价语料要素识别服务"""
-
 import torch
 from transformers import BertTokenizerFast
 from train_bert_ner import BertCRFNER
 from typing import List
 from dataclasses import dataclass
+from train_bert_ner import MODEL_PATH, WEIGHTS_PATH
 
 # ============================================================
 # 配置
 # ============================================================
 
-MODEL_DIR = './models/bert-base-chinese'
-WEIGHTS_PATH = 'bert_crf_bond_ner.pth'
 MAX_LENGTH = 64
-DEVICE = torch.device('cuda' if torch.cuda.is_available() else ('mps' if torch.backends.mps.is_available() else 'cpu'))
+DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 # 标签映射（与训练时保持一致）
 TAG2IDX = {'O': 0, '<PAD>': 1}
@@ -31,7 +27,7 @@ TAG_DESCRIPTION = {
     'YIELD': '收益率',
     'QUANTITY': '数量/金额',
     'DATE': '日期/期限',
-    'SPEED': '利差（BP）',
+    'SPEED': '速度',
 }
 
 
@@ -42,19 +38,19 @@ TAG_DESCRIPTION = {
 @dataclass
 class Entity:
     """识别出的实体"""
-    type: str           # 实体类型：SIDE, PRODUCT, YIELD, QUANTITY, DATE, SPEED
-    text: str           # 实体原文
-    start: int          # 实体在原文中的起始字符位置（包含）
-    end: int            # 实体在原文中的结束字符位置（不包含）
+    type: str  # 实体类型：SIDE, PRODUCT, YIELD, QUANTITY, DATE, SPEED
+    text: str  # 实体原文
+    start: int  # 实体在原文中的起始字符位置（包含）
+    end: int  # 实体在原文中的结束字符位置（不包含）
     description: str = ''  # 实体中文描述
 
 
 @dataclass
 class NERResult:
     """NER 识别结果"""
-    text: str           # 原始文本
-    tokens: List[str]   # 分词结果
-    tags: List[str]     # 每个 token 的标签
+    text: str  # 原始文本
+    tokens: List[str]  # 分词结果
+    tags: List[str]  # 每个 token 的标签
     entities: List[Entity]  # 识别出的实体列表
 
     def to_dict(self) -> dict:
@@ -92,7 +88,7 @@ class NERResult:
 class BondQuoteNERService:
     """债券询价 NER 服务"""
 
-    def __init__(self, model_dir: str = MODEL_DIR, weights_path: str = WEIGHTS_PATH):
+    def __init__(self, model_dir: str = MODEL_PATH, weights_path: str = WEIGHTS_PATH):
         self.tokenizer = BertTokenizerFast.from_pretrained(model_dir)
         self.model = BertCRFNER(len(TAG2IDX), bert_model_name=model_dir)
         self.model.load_state_dict(torch.load(weights_path, map_location='cpu'))
@@ -103,81 +99,131 @@ class BondQuoteNERService:
     def _is_chinese(ch: str) -> bool:
         return '\u4e00' <= ch <= '\u9fff'
 
-    @staticmethod
-    def _split_token_by_boundaries(token: str) -> List[str]:
+    def _split_date_speed(self, text: str) -> List[str]:
         """
-        按边界分割 token（中文/数字/字母/符号边界）
-        例如: "出2000w1.985" -> ["出", "2000w", "1.985"]
-              "250203.ib"   -> ["250203", ".ib"]
+        预处理语料，将DATE+SPEED连在一起的字符串分隔开
+        仅在以下情况执行分隔：
+        1. part中包含'+'
+        2. '+'前面有连续字符（即DATE和SPEED连在一起）
+
+        支持的模式：
+        - t+0, t+1, t+2, t+3, t+4, t+5
+        - tom+0, tom+1, ...
+        - 今天+0, 今日+1, 明天+2, 明日+3, ...
+        - 周一+1, 周二+2, 周三+3, 周四+4, 周五+5
+
+        例如:
+        - "t+0" -> ["t", "+0"]
+        - "tom+1" -> ["tom", "+1"]
+        - "今天+2" -> ["今天", "+2"]
+        - "t +0" -> ["t +0"] (已用空格分隔，无需处理)
         """
-        if not token:
-            return []
+        # 检查是否包含'+'
+        if '+' not in text:
+            return [text]
 
-        sub_tokens = []
-        start = 0
+        # 找到'+'的位置
+        plus_index = text.index('+')
 
-        for i in range(1, len(token)):
-            curr, prev = token[i], token[i - 1]
+        # 检查'+'前面是否有连续字符（非空格）
+        if plus_index == 0:
+            # '+'在开头，如"+0"，无需分隔
+            return [text]
 
-            is_curr_cjk = BondQuoteNERService._is_chinese(curr)
-            is_prev_cjk = BondQuoteNERService._is_chinese(prev)
-            is_curr_digit = curr.isdigit()
-            is_prev_digit = prev.isdigit()
-            is_curr_letter = curr.isalpha()
-            is_prev_letter = prev.isalpha()
+        # 检查'+'前面是否是空格（如"t +0"）
+        if text[plus_index - 1] == ' ':
+            # 已经用空格分隔，无需处理
+            return [text]
 
-            boundary = False
-            if is_curr_cjk != is_prev_cjk:
-                # 中文 <-> 非中文（含英文标点等）
-                boundary = True
-            elif (is_curr_digit and is_prev_letter) or (is_curr_letter and is_prev_digit):
-                # 数字 <-> 字母（如 "2000w", "ib250203"）
-                boundary = True
-            elif (is_curr_digit or is_curr_letter) and not (is_prev_digit or is_prev_letter) and not is_prev_cjk:
-                # 数字/字母 <-> 符号（如 "1.985", ".ib"）
-                boundary = True
-            elif not (is_curr_digit or is_curr_letter or is_curr_cjk) and (is_prev_digit or is_prev_letter) and not is_prev_cjk:
-                # 符号 <-> 数字/字母（如 "250203.", "w1"）
-                boundary = True
+        # DATE值列表（按长度降序排列，优先匹配长字符串）
+        date_values = [
+            '今天', '今日', '明天', '明日',
+            '周一', '周二', '周三', '周四', '周五',
+            'tom', 't'
+        ]
 
-            if boundary:
-                sub_tokens.append(token[start:i])
-                start = i
+        # SPEED值列表
+        speed_values = ['+0', '+1', '+2', '+3', '+4', '+5']
 
-        if start < len(token):
-            sub_tokens.append(token[start:])
+        # 提取'+'前面的部分（DATE）和'+'后面的部分（SPEED）
+        before_plus = text[:plus_index]
+        after_plus = text[plus_index:]
 
-        return sub_tokens
+        # 尝试匹配DATE值
+        matched_date = None
+        for date_val in date_values:
+            if before_plus.endswith(date_val):
+                matched_date = date_val
+                break
+
+        if matched_date is None:
+            # 没有匹配到DATE值，返回原字符串
+            return [text]
+
+        # 尝试匹配SPEED值
+        matched_speed = None
+        for speed_val in speed_values:
+            if after_plus.startswith(speed_val):
+                matched_speed = speed_val
+                break
+
+        if matched_speed is None:
+            # 没有匹配到SPEED值，返回原字符串
+            return [text]
+
+        # 成功匹配DATE和SPEED，进行分隔
+        # 处理DATE前面的部分（如果有）
+        tokens = []
+        prefix = before_plus[:-len(matched_date)]
+        if prefix:
+            tokens.append(prefix)
+
+        tokens.append(matched_date)
+        tokens.append(matched_speed)
+
+        # 处理SPEED后面的部分（如果有）
+        suffix = after_plus[len(matched_speed):]
+        if suffix:
+            tokens.append(suffix)
+
+        return tokens
 
     def _tokenize_text(self, text: str) -> tuple:
         """
         对输入文本进行分词，返回 (tokens, char_offsets)
-        支持空格分割 + 数字/字母/中文边界智能分割，
-        确保无空格输入（如 "出2000w1.985250203.ib"）也能正确分词。
-        char_offsets: 每个 token 在原文中的 (start, end) 字符偏移
+
+        处理流程：
+        1. 按空格分割文本
+        2. 对每个part，如果包含'+'且前面有连续字符，则进行DATE+SPEED分隔
+        3. 记录每个token在原文中的字符偏移
+
+        char_offsets: 每个token在原文中的(start, end)字符偏移
         """
         tokens = []
         char_offsets = []
-        i = 0
-        while i < len(text):
-            if text[i].isspace():
-                i += 1
-                continue
-            # 找到连续非空格字符作为一个 chunk
-            chunk_start = i
-            while i < len(text) and not text[i].isspace():
-                i += 1
-            chunk = text[chunk_start:i]
 
-            # 按 中文/数字/字母/符号 边界进一步分割
-            sub_tokens = self._split_token_by_boundaries(chunk)
-            if sub_tokens:
-                # 计算每个 sub_token 在原文中的偏移
-                offset = chunk_start
-                for sub in sub_tokens:
-                    tokens.append(sub)
-                    char_offsets.append((offset, offset + len(sub)))
-                    offset += len(sub)
+        # 按空格分割
+        parts = text.split()
+
+        for part in parts:
+            if not part:
+                continue
+
+            # 找到该part在原文中的起始位置
+            part_start = text.find(part)
+
+            # 仅当part包含'+'时才进行DATE+SPEED分隔处理
+            if '+' in part:
+                sub_tokens = self._split_date_speed(part)
+            else:
+                sub_tokens = [part]
+
+            # 计算每个sub_token的字符偏移
+            offset = part_start
+            for sub_token in sub_tokens:
+                tokens.append(sub_token)
+                char_offsets.append((offset, offset + len(sub_token)))
+                offset += len(sub_token)
 
         return tokens, char_offsets
 
