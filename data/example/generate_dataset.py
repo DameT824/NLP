@@ -1,11 +1,12 @@
 import random
 from pathlib import Path
-from typing import List, Dict, Tuple
+from typing import List, Dict, Tuple, Union
 
 DATASET_PATH = './generated_data'
+SPACE_TOKEN = '<sp>'  # 特殊标记：表示原始文本中的空格
 
 class BondQuoteDataGenerator:
-    """债券询价数据生成器"""
+    """债券询价数据生成器（字符级 IOBES 标注）"""
 
     def __init__(self):
         # 字段定义
@@ -14,10 +15,10 @@ class BondQuoteDataGenerator:
             '收', '出', '买', '卖', '买入', '卖出'
         ]
 
-        self.quantity_units = ['e', 'k', 'kw', 'w', '亿', '万', '']
+        self.quantity_units = ['亿', 'e', 'k', 'kw', 'w', '万', 'm', 'mio', 'million', '']
 
         self.date_values = [
-            't', 'tom', '今天', '明天',
+            't', 'tom', '今天', '明天', '今日', '明日', '今', '明',
             '周一', '周二', '周三', '周四', '周五'
         ]
 
@@ -51,28 +52,88 @@ class BondQuoteDataGenerator:
             ['其他'], ['还有其他券吗'], ['有没有别的'], ['具体聊'], ['私聊'], ['详聊'], ['聊一下'],
         ]
 
-    def _inject_noise(self, words: List[str], tags: List[str], noise_ratio: float = 0.4) -> Tuple[List[str], List[str]]:
-        """
-        在已有的 tokens 序列中随机插入噪声词，噪声词标签为 O。
+        # 连写配置
+        # DATE+SPEED 占 80%，其余 SIDE+QUANTITY / QUANTITY+SIDE / SIDE+PRODUCT 共占 20%
+        self.concat_pair_weights = {
+            ('DATE', 'SPEED'): 80,
+            ('SIDE', 'QUANTITY'): 7,
+            ('QUANTITY', 'SIDE'): 7,
+            ('SIDE', 'PRODUCT'): 6,
+        }
 
-        noise_ratio: 插入噪声的概率（0-1），建议 0.3~0.5
+    def _char_iobes(self, text: str, tag_name: str) -> Tuple[List[str], List[str]]:
+        """将文本转换为字符级 IOBES 标注，返回 (chars_list, tags_list)"""
+        chars = list(text)
+        n = len(chars)
+        if n == 0:
+            return [], []
+        elif n == 1:
+            return chars, [f'S-{tag_name}']
+        else:
+            tags = [f'B-{tag_name}'] + [f'I-{tag_name}'] * (n - 2) + [f'E-{tag_name}']
+            return chars, tags
+
+    def _inject_noise_chars(
+        self, chars: List[str], tags: List[str], noise_ratio: float = 0.4
+    ) -> Tuple[List[str], List[str]]:
+        """
+        在字符序列中随机插入噪声字符，噪声字符标签为 O。
+        噪声模板中的多 token 条目，token 之间插入 <sp> 空格标记。
         """
         if random.random() > noise_ratio:
-            return words, tags
+            return chars, tags
 
-        # 随机选择 1~3 个噪声片段插入
         num_noise = random.randint(1, 3)
-
         for _ in range(num_noise):
             noise_tokens = random.choice(self.noise_templates)
-            # 随机选择插入位置（0 到 len(words)）
-            insert_pos = random.randint(0, len(words))
+            noise_chars = []
+            for j, token in enumerate(noise_tokens):
+                if j > 0:
+                    noise_chars.append(SPACE_TOKEN)
+                noise_chars.extend(list(token))
+            noise_tags = ['O'] * len(noise_chars)
 
-            for i, token in enumerate(noise_tokens):
-                words.insert(insert_pos + i, token)
-                tags.insert(insert_pos + i, 'O')
+            insert_pos = random.randint(0, len(chars))
+            chars = chars[:insert_pos] + noise_chars + chars[insert_pos:]
+            tags = tags[:insert_pos] + noise_tags + tags[insert_pos:]
 
-        return words, tags
+        return chars, tags
+
+    def _try_concatenate(
+        self, fields: Dict[str, str]
+    ) -> List[Union[Tuple[str, str], Tuple[str, List[Tuple[str, str]]]]]:
+        """
+        先对 fields 尝试连写组合，连写对作为整体返回，其余字段独立返回。
+        
+        返回列表，每个元素为 (value, tag_info)：
+        - 非连写: tag_info 是 str（如 'SIDE'）
+        - 连写:   tag_info 是 list（如 [('bid','SIDE'), ('2000w','QUANTITY')]）
+        """
+        field_names = list(fields.keys())
+
+        # 根据权重随机选择一种连写对
+        pairs, weights = zip(*self.concat_pair_weights.items())
+        chosen_pair = random.choices(pairs, weights=weights, k=1)[0]
+
+        # 找到匹配的连写对并合并
+        used = set()
+        result = []
+        concat_applied = False
+
+        # 优先尝试选中连写对
+        if chosen_pair[0] in fields and chosen_pair[1] in fields:
+            v1, v2 = fields[chosen_pair[0]], fields[chosen_pair[1]]
+            result.append((v1 + v2, [(v1, chosen_pair[0]), (v2, chosen_pair[1])]))
+            used.add(chosen_pair[0])
+            used.add(chosen_pair[1])
+            concat_applied = True
+
+        # 剩余字段独立加入
+        for name in field_names:
+            if name not in used:
+                result.append((fields[name], name))
+
+        return result, concat_applied
 
     def generate_product_code(self) -> str:
         """生成券码"""
@@ -126,7 +187,7 @@ class BondQuoteDataGenerator:
         rand = random.random()
         fields = {}
 
-        if rand < 0.4:
+        if rand < 0.5:
             # 同时有 date 和 speed
             fields['DATE'] = random.choice(self.date_values)
             fields['SPEED'] = random.choice(self.speed_values)
@@ -165,38 +226,46 @@ class BondQuoteDataGenerator:
         return fields
 
     def create_quote_sentence(self, fields: Dict[str, str], with_noise: bool = True) -> Tuple[str, str]:
-        """创建询价句子和标注
+        """
+        创建字符级 IOBES 标注的询价句子。
+        
+        流程：生成字段 → 先尝试连写组合 → 连写组合作为整体参与打乱顺序 → 字符级 IOBES 标注
 
         with_noise: 是否在句子中随机插入噪声内容（默认True）
         """
-        field_order = [k for k in fields.keys()]
-        random.shuffle(field_order)
+        # 先尝试连写（连写组合作为整体）
+        field_entries, concat_applied = self._try_concatenate(fields)
 
-        words = []
-        tags = []
+        # 连写组合与非连写字段统一打乱顺序
+        random.shuffle(field_entries)
 
-        for field_name in field_order:
-            field_value = fields[field_name]
-            field_words = field_value.split()
+        all_chars = []
+        all_tags = []
 
-            # 处理多token字段
-            if len(field_words) == 1:
-                tags.append(f"S-{field_name}")
-                words.extend(field_words)
-            elif len(field_words) > 1:
-                tags.append(f"B-{field_name}")
-                for _ in range(len(field_words) - 2):
-                    tags.append(f"I-{field_name}")
-                tags.append(f"E-{field_name}")
-                words.extend(field_words)
+        for i, (value, tag_info) in enumerate(field_entries):
+            # 各字段/组合之间插入 <sp> 空格标记
+            if i > 0:
+                all_chars.append(SPACE_TOKEN)
+                all_tags.append('O')
 
-        # 插入噪声内容
+            if isinstance(tag_info, list):
+                # 连写字段：分别对各原始字段值做字符级 IOBES
+                for original_value, tag_name in tag_info:
+                    chars, iobes_tags = self._char_iobes(original_value, tag_name)
+                    all_chars.extend(chars)
+                    all_tags.extend(iobes_tags)
+            else:
+                # 非连写字段
+                chars, iobes_tags = self._char_iobes(value, tag_info)
+                all_chars.extend(chars)
+                all_tags.extend(iobes_tags)
+
+        # 插入噪声
         if with_noise:
-            words, tags = self._inject_noise(words, tags)
+            all_chars, all_tags = self._inject_noise_chars(all_chars, all_tags)
 
-        sentence = ' '.join(words)
-        tags_sentence = ' '.join(tags)
-
+        sentence = ' '.join(all_chars)
+        tags_sentence = ' '.join(all_tags)
         return sentence, tags_sentence
 
     def generate_single_sample(self, with_noise: bool = True) -> Tuple[str, str]:
@@ -273,26 +342,18 @@ class BondQuoteDataGenerator:
         print(f"输出目录: {output_path}")
 
     def generate_vocab(self, sentences: List[str], output_path: Path):
-        """生成词汇表"""
-        # 词表
-        words = set()
-        for sentence in sentences:
-            words.update(sentence.split())
-
-        # 添加特殊标记
-        words.update(['<pad>', '<unk>'])
-
-        with open(output_path / 'vocab.words.txt', 'w', encoding='utf-8') as f:
-            for word in sorted(words):
-                f.write(word + '\n')
-
-        # 字符表
+        """生成字符级词汇表"""
+        # 字符集：每个句子是空格分隔的字符/标记，直接 split 即可
         chars = set()
         for sentence in sentences:
-            for word in sentence.split():
-                chars.update(list(word))
+            chars.update(sentence.split())
 
-        chars.update(['<pad>', '<unk>'])
+        # 添加特殊标记
+        chars.update(['<pad>', '<unk>', SPACE_TOKEN])
+
+        with open(output_path / 'vocab.words.txt', 'w', encoding='utf-8') as f:
+            for char in sorted(chars):
+                f.write(char + '\n')
 
         with open(output_path / 'vocab.chars.txt', 'w', encoding='utf-8') as f:
             for char in sorted(chars):
@@ -312,7 +373,7 @@ def main():
     """主函数"""
     print("🚀 开始生成债券询价数据集...")
 
-    n_samples = 50000
+    n_samples = 50
 
     # 创建基础生成器
     generator = BondQuoteDataGenerator()
