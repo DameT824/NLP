@@ -18,39 +18,57 @@ class BondQuoteDataGenerator:
         self.quantity_units = ['亿', 'e', 'k', 'kw', 'w', '万', 'm', 'mio', 'million', '']
 
         self.date_values = [
-            't', 'tom', '今天', '明天', '今日', '明日', '今', '明',
+            't', 'tom',
+            '今天', '明天', '今日', '明日', '今', '明',
             '周一', '周二', '周三', '周四', '周五'
         ]
+
+        # 日期权重：'t'=30%, 'tom'=30%, 周一~周五共20%(各4%), 今天/明天相关共20%(各~3.33%)
+        # self.date_weights = [
+        #     30, 30,
+        #     10/3, 10/3, 10/3, 10/3, 10/3, 10/3,
+        #     4, 4, 4, 4, 4
+        # ]
+        self.date_weights = [0.3] * 2 + [0.2 / 6] * 6 + [0.2 / 5] * 5
 
         self.speed_values = ['+0', '+1', '+2', '+3', '+4', '+5']
 
         # 噪声文本模板池（生产环境中用户可能夹杂的无关内容）
-        self.noise_templates = [
-            # 语气词 / 闲聊
-            ['早'], ['需请示'], ['能做吗'], ['可以做吗'], ['能发吗'], ['能出吗'], ['能收吗'],
-            ['有吗'], ['有的吗'], ['有券吗'], ['有没有'], ['还有吗'],
-            ['麻烦确认一下'], ['麻烦看下'], ['帮忙看一下'],
-            ['麻烦报价'], ['麻烦给个价'], ['请问一下'],
-            ['@迟钧文-平安银行'], ['@张子健-平安银行'], ['@杨叶艺-平安银行'], ['给@付依孝-平安银行'], ['@李骅-平安银行'],
-            # 债券相关但非结构化描述
-            ['25特长国债06'], ['23附息国债11'], ['25附息国债12'], ['26附息国债07'], ['25超长特别国债06'], ['26超长特别国债02'], ['25南京银行科创债01BC'], ['25农发贴现07(免)'],
-            ['25特2'], ['25t2'], ['24特6'], ['23t1'],
-            ['24国开15'], ['25国开11'], ['26国开02'], ['25国开清发02'], ['22农发12'],
-            ['23北京06'], ['25天津09'],
-            ['22兴业银行CD313'], ['23浦发银行CD101'], ['22浦发银行CD154'], ['22北京银行CD097'], ['23中信银行CD161'], ['24浙商银行CD156'],
-            ['114D', '23中国银行CD002'], ['91D', '23广发银行CD099'],
-            ['30年国债'], ['10年国开'], ['5年政金债'], ['10Y国开'], ['5Y政金债'], ['10Y国债'],
-            ['超长债'], ['长端利率债'], ['信用债'], ['城投债'], ['存单'], ['cd'], ['ncd'], ['农商'],
-            ['二级资本债'], ['永续债'], ['商金债'], ['农发债'], ['政金债'], ['国开债'], ['政策性金融债'], ['其他金融机构债'],
-            ['新券'], ['老券'], ['活跃券'], ['次新券'],
-            ['97D'], ['316D'], ['308D'], ['345d'], ['136d'], ['41d'], ['255d'],
-            ['9.9Y'], ['7.28Y'], ['7.62Y'], ['4.7956Y'], ['1.0192Y(休1)'], ['8.99Y(休1)'], ['3.9754Y(休1)'], ['9.7041Y(休2)'], ['28.99Y(休1)'],
-            ['到期'], ['大量'], ['散量'], ['国际'], ['中债'], ['国利'], ['票面利率'], ['公募'], ['基金'],
-            # 交易相关
-            ['ref'], ['做'], ['tkn'], ['tks'], ['gvn'],
-            ['成交了吗'], ['成了吗'], ['成交了'],
-            ['其他'], ['还有其他券吗'], ['有没有别的'], ['具体聊'], ['私聊'], ['详聊'], ['聊一下'],
-        ]
+        self.noise_templates = {
+            '语气词': [
+                '早', '需请示', '能做吗', '可以做吗', '能发吗', '能出吗', '能收吗',
+                '有吗', '有的吗', '有券吗', '有没有', '还有吗',
+                '麻烦确认一下', '麻烦看下', '帮忙看一下',
+                '麻烦报价', '麻烦给个价', '请问一下',
+                '@迟钧文-平安银行', '@张子健-平安银行', '@杨叶艺-平安银行',
+                '给@付依孝-平安银行', '@李骅-平安银行',
+            ],
+            '债券相关描述': [
+                '25特长国债06', '23附息国债11', '25附息国债12', '26附息国债07',
+                '25超长特别国债06', '26超长特别国债02',
+                '25南京银行科创债01BC', '25农发贴现07(免)',
+                '25特2', '25t2', '24特6', '23t1',
+                '24国开15', '25国开11', '26国开02', '25国开清发02', '22农发12',
+                '23北京06', '25天津09',
+                '22兴业银行CD313', '23浦发银行CD101', '22浦发银行CD154',
+                '22北京银行CD097', '23中信银行CD161', '24浙商银行CD156',
+                '114D 23中国银行CD002', '91D 23广发银行CD099',
+                '30年国债', '10年国开', '5年政金债', '10Y国开', '5Y政金债', '10Y国债',
+                '超长债', '长端利率债', '信用债', '城投债', '存单', 'cd', 'ncd', '农商',
+                '二级资本债', '永续债', '商金债', '农发债', '政金债', '国开债',
+                '政策性金融债', '其他金融机构债',
+                '新券', '老券', '活跃券', '次新券',
+                '97D', '316D', '308D', '345d', '136d', '41d', '255d',
+                '9.9Y', '7.28Y', '7.62Y', '4.7956Y', '1.0192Y(休1)', '8.99Y(休1)',
+                '3.9754Y(休1)', '9.7041Y(休2)', '28.99Y(休1)',
+                '到期', '大量', '散量', '国际', '中债', '国利', '票面利率', '公募', '基金',
+            ],
+            '交易相关描述': [
+                'ref', '做', 'tkn', 'tks', 'gvn',
+                '成交了吗', '成了吗', '成交了',
+                '其他', '还有其他券吗', '有没有别的', '具体聊', '私聊', '详聊', '聊一下',
+            ],
+        }
 
         # 连写配置
         # DATE+SPEED 占 80%，其余 SIDE+QUANTITY / QUANTITY+SIDE / SIDE+PRODUCT 共占 20%
@@ -73,31 +91,14 @@ class BondQuoteDataGenerator:
             tags = [f'B-{tag_name}'] + [f'I-{tag_name}'] * (n - 2) + [f'E-{tag_name}']
             return chars, tags
 
-    def _inject_noise_chars(
-        self, chars: List[str], tags: List[str], noise_ratio: float = 0.4
-    ) -> Tuple[List[str], List[str]]:
-        """
-        在字符序列中随机插入噪声字符，噪声字符标签为 O。
-        噪声模板中的多 token 条目，token 之间插入 <sp> 空格标记。
-        """
-        if random.random() > noise_ratio:
-            return chars, tags
-
-        num_noise = random.randint(1, 3)
+    def _generate_noise_entries(self, num_noise: int) -> List[Tuple[str, str]]:
+        """生成噪声 field_entry 列表，每个元素为 (noise_text, 'O')"""
+        entries = []
         for _ in range(num_noise):
-            noise_tokens = random.choice(self.noise_templates)
-            noise_chars = []
-            for j, token in enumerate(noise_tokens):
-                if j > 0:
-                    noise_chars.append(SPACE_TOKEN)
-                noise_chars.extend(list(token))
-            noise_tags = ['O'] * len(noise_chars)
-
-            insert_pos = random.randint(0, len(chars))
-            chars = chars[:insert_pos] + noise_chars + chars[insert_pos:]
-            tags = tags[:insert_pos] + noise_tags + tags[insert_pos:]
-
-        return chars, tags
+            category = random.choice(list(self.noise_templates.keys()))
+            noise_text = random.choice(self.noise_templates[category])
+            entries.append((noise_text, 'O'))
+        return entries
 
     def _try_concatenate(
         self, fields: Dict[str, str]
@@ -120,13 +121,21 @@ class BondQuoteDataGenerator:
         result = []
         concat_applied = False
 
-        # 优先尝试选中连写对
-        if chosen_pair[0] in fields and chosen_pair[1] in fields:
-            v1, v2 = fields[chosen_pair[0]], fields[chosen_pair[1]]
-            result.append((v1 + v2, [(v1, chosen_pair[0]), (v2, chosen_pair[1])]))
-            used.add(chosen_pair[0])
-            used.add(chosen_pair[1])
+        # "t" 必须与 SPEED 连写，强制处理
+        if fields.get('DATE') == 't' and 'SPEED' in fields:
+            v1, v2 = fields['DATE'], fields['SPEED']
+            result.append((v1 + v2, [(v1, 'DATE'), (v2, 'SPEED')]))
+            used.add('DATE')
+            used.add('SPEED')
             concat_applied = True
+        else:
+            # 非强制情况：根据权重随机选择一种连写对
+            if chosen_pair[0] in fields and chosen_pair[1] in fields:
+                v1, v2 = fields[chosen_pair[0]], fields[chosen_pair[1]]
+                result.append((v1 + v2, [(v1, chosen_pair[0]), (v2, chosen_pair[1])]))
+                used.add(chosen_pair[0])
+                used.add(chosen_pair[1])
+                concat_applied = True
 
         # 剩余字段独立加入
         for name in field_names:
@@ -157,8 +166,8 @@ class BondQuoteDataGenerator:
                 return f"{integer_part}.{decimal_part:0{decimal_places}d}"
             else:
                 return f"{integer_part}.{decimal_part:0{decimal_places}d}%"
-        elif random.random() < 0.3:
-            return f"{random.randint(1, 5)}"
+        elif random.random() < 0.5:
+            return f"{random.randint(1, 5)}.0"
         else:
             return f"{random.randint(1, 5)}%"
 
@@ -189,11 +198,16 @@ class BondQuoteDataGenerator:
 
         if rand < 0.5:
             # 同时有 date 和 speed
-            fields['DATE'] = random.choice(self.date_values)
+            fields['DATE'] = random.choices(self.date_values, weights=self.date_weights, k=1)[0]
             fields['SPEED'] = random.choice(self.speed_values)
         elif rand < 0.7:
-            # 只有 date
-            fields['DATE'] = random.choice(self.date_values)
+            # 只有 date（"t" 必须带 speed，不能单独出现）
+            date = random.choices(self.date_values, weights=self.date_weights, k=1)[0]
+            if date == 't':
+                fields['DATE'] = date
+                fields['SPEED'] = random.choice(self.speed_values)
+            else:
+                fields['DATE'] = date
         elif rand < 0.9:
             # 只有 speed
             fields['SPEED'] = random.choice(self.speed_values)
@@ -228,15 +242,21 @@ class BondQuoteDataGenerator:
     def create_quote_sentence(self, fields: Dict[str, str], with_noise: bool = True) -> Tuple[str, str]:
         """
         创建字符级 IOBES 标注的询价句子。
-        
-        流程：生成字段 → 先尝试连写组合 → 连写组合作为整体参与打乱顺序 → 字符级 IOBES 标注
 
-        with_noise: 是否在句子中随机插入噪声内容（默认True）
+        流程：生成字段 → 连写组合 → 噪声作为独立 field 插入 → 统一打乱 → 字符级 IOBES 标注
+
+        with_noise: 是否在句子中加入噪声内容（默认True）
         """
         # 先尝试连写（连写组合作为整体）
         field_entries, concat_applied = self._try_concatenate(fields)
 
-        # 连写组合与非连写字段统一打乱顺序
+        # 将噪声作为独立 field 插入 field_entries（与业务字段同级）
+        if with_noise:
+            num_noise = random.randint(1, 3)
+            noise_entries = self._generate_noise_entries(num_noise)
+            field_entries.extend(noise_entries)
+
+        # 所有条目（业务字段 + 噪声）统一打乱顺序
         random.shuffle(field_entries)
 
         all_chars = []
@@ -248,7 +268,17 @@ class BondQuoteDataGenerator:
                 all_chars.append(SPACE_TOKEN)
                 all_tags.append('O')
 
-            if isinstance(tag_info, list):
+            if tag_info == 'O':
+                # 噪声字段：按空格拆分为词，词间插 <sp>，全部标 O
+                noise_tokens = value.split()
+                for j, token in enumerate(noise_tokens):
+                    if j > 0:
+                        all_chars.append(SPACE_TOKEN)
+                        all_tags.append('O')
+                    for c in token:
+                        all_chars.append(c)
+                        all_tags.append('O')
+            elif isinstance(tag_info, list):
                 # 连写字段：分别对各原始字段值做字符级 IOBES
                 for original_value, tag_name in tag_info:
                     chars, iobes_tags = self._char_iobes(original_value, tag_name)
@@ -260,16 +290,16 @@ class BondQuoteDataGenerator:
                 all_chars.extend(chars)
                 all_tags.extend(iobes_tags)
 
-        # 插入噪声
-        if with_noise:
-            all_chars, all_tags = self._inject_noise_chars(all_chars, all_tags)
+        # 构建原始可读句子（所有 field_entry 的 value 用空格拼接）
+        original_parts = [value for value, _ in field_entries]
+        original_sentence = ' '.join(original_parts)
 
         sentence = ' '.join(all_chars)
         tags_sentence = ' '.join(all_tags)
-        return sentence, tags_sentence
+        return sentence, tags_sentence, original_sentence
 
-    def generate_single_sample(self, with_noise: bool = True) -> Tuple[str, str]:
-        """生成单个样本"""
+    def generate_single_sample(self, with_noise: bool = True) -> Tuple[str, str, str]:
+        """生成单个样本，返回 (chars_sentence, tags_sentence, original_sentence)"""
         fields = self.generate_field_combination()
         return self.create_quote_sentence(fields, with_noise=with_noise)
 
@@ -286,12 +316,14 @@ class BondQuoteDataGenerator:
         # 生成训练数据
         train_words = []
         train_tags = []
+        train_originals = []
         num_noisy = int(num_samples * noise_ratio)
         for i in range(num_samples):
             with_noise = i < num_noisy
-            sentence, tags = self.generate_single_sample(with_noise=with_noise)
+            sentence, tags, original = self.generate_single_sample(with_noise=with_noise)
             train_words.append(sentence)
             train_tags.append(tags)
+            train_originals.append(original)
 
         # 保存训练数据
         with open(output_path / 'train.words.txt', 'w', encoding='utf-8') as f:
@@ -303,12 +335,14 @@ class BondQuoteDataGenerator:
         # 生成验证数据（同样比例）
         val_words = []
         val_tags = []
+        val_originals = []
         val_noisy = int(num_samples * 0.1 * noise_ratio)
         for i in range(int(num_samples * 0.1)):
             with_noise = i < val_noisy
-            sentence, tags = self.generate_single_sample(with_noise=with_noise)
+            sentence, tags, original = self.generate_single_sample(with_noise=with_noise)
             val_words.append(sentence)
             val_tags.append(tags)
+            val_originals.append(original)
 
         with open(output_path / 'val.words.txt', 'w', encoding='utf-8') as f:
             f.write('\n'.join(val_words))
@@ -319,18 +353,25 @@ class BondQuoteDataGenerator:
         # 生成测试数据
         test_words = []
         test_tags = []
+        test_originals = []
         test_noisy = int(num_samples * 0.1 * noise_ratio)
         for i in range(int(num_samples * 0.1)):
             with_noise = i < test_noisy
-            sentence, tags = self.generate_single_sample(with_noise=with_noise)
+            sentence, tags, original = self.generate_single_sample(with_noise=with_noise)
             test_words.append(sentence)
             test_tags.append(tags)
+            test_originals.append(original)
 
         with open(output_path / 'test.words.txt', 'w', encoding='utf-8') as f:
             f.write('\n'.join(test_words))
 
         with open(output_path / 'test.tags.txt', 'w', encoding='utf-8') as f:
             f.write('\n'.join(test_tags))
+
+        # 保存原始可读句子
+        all_originals = train_originals + val_originals + test_originals
+        with open(output_path / 'original_sentences.txt', 'w', encoding='utf-8') as f:
+            f.write('\n'.join(all_originals))
 
         # 生成词汇表
         self.generate_vocab(train_words, output_path)
@@ -339,6 +380,7 @@ class BondQuoteDataGenerator:
         print(f"训练集: {len(train_words)} 条（含噪声: {num_noisy}, 纯净: {num_samples - num_noisy}）")
         print(f"验证集: {len(val_words)} 条")
         print(f"测试集: {len(test_words)} 条")
+        print(f"原始句子: {len(all_originals)} 条 → {output_path / 'original_sentences.txt'}")
         print(f"输出目录: {output_path}")
 
     def generate_vocab(self, sentences: List[str], output_path: Path):
